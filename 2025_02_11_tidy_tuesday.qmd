@@ -1,0 +1,53 @@
+---
+title: "Tidy Tuesday 2-11-2025"
+author: "Bridget Liesman"
+format: 
+  html:
+    df-print: paged
+    embed-resources: true
+---
+
+```{r message=FALSE}
+#Load the necessary library
+library(tidyverse)
+
+#Get the data
+tuesdata <- tidytuesdayR::tt_load(2025, week = 6)
+cdc_datasets <- tuesdata$cdc_datasets
+glimpse(cdc_datasets)
+```
+
+```{r warning=FALSE}
+#Pull out tags and remove extra characters
+tags_raw <- cdc_datasets %>% 
+  filter(tags != 'This dataset does not have any tags') %>% 
+  select(tags) %>%
+  str_split(',') %>% unlist() %>%
+  str_replace_all('\\\\|\"|-', '') %>%
+  str_squish() %>% as.data.frame() %>% rename('tag'='.')
+
+#Create stop words df of words to remove, including years
+stop_words <- data.frame(
+  word = c('nndss','nedss','united states','nvss','osh','brfss','nchs','netss','survey',
+           'mmwr','outcomes', 'nisacm',
+           as.character(c(1900:2100)))
+)
+
+#Remove stop words from dataset
+tags_clean <- tags_raw %>% anti_join(stop_words, by=c('tag'='word'))
+
+#Plot the 25 most frequent tags
+tags_clean %>% table() %>% as.data.frame() %>% 
+  slice_max(Freq,n=25) %>%
+  ggplot(aes(x=fct_reorder(tag,Freq),y=Freq)) + geom_col() + coord_flip() +
+  labs(x='Frequency', y='Tag')
+```
+
+```{r}
+#Plot the 25 most frequent categories
+cdc_datasets %>% filter(category != 'This dataset has not been categorized') %>% 
+  select(category) %>% table() %>% as.data.frame() %>%
+  slice_max(Freq, n=25) %>%
+  ggplot(aes(x=fct_reorder(category, Freq), y=Freq)) + geom_col() + coord_flip() +
+  labs(x='Frequency', y='Category')
+```
