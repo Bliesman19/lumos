@@ -1,0 +1,265 @@
+---
+title: "Tidy Tuesday 2-18-2025"
+author: "Bridget Liesman"
+format: 
+  html:
+    df-print: paged
+    embed-resources: true
+---
+
+## Set up
+
+```{r message=FALSE}
+#Load libraries
+library(tidyverse)
+library(ggmap)
+library(keyring)
+library(rpart)
+library(partykit)
+library(scales)
+
+#Get data
+tuesdata <- tidytuesdayR::tt_load('2025-02-18')
+agencies <- tuesdata$agencies
+```
+
+## Explore the Data
+
+```{r}
+glimpse(agencies)
+```
+
+```{r}
+#Explore the states included in the data
+agencies %>% group_by(state) %>% summarize(count=n()) %>% arrange(desc(count))
+```
+
+All fifty states are included in the dataset however each state varies in the amount of information available.
+
+```{r}
+#Explore the types of agencies in the dataset
+ggplot(data=agencies, aes(x=agency_type)) + geom_bar() +
+  labs(x='Agency Type', y='Count', title = 'Agency Type Counts') +
+  scale_y_continuous(labels = label_comma()) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.75))
+```
+
+As expected, we have a large number of city and county agencies. Agencies like State Police, Other State Agencies, Tribal, and University or College are expected. Let's take a look at the Unknown, and NA agency types
+
+```{r}
+#Pull all values in the Unknown and NA type
+agencies %>% filter(agency_type %in% c('Unknown','Other',NA))
+
+#Create Education agency type to take relevant agencies and the College and University type
+agencies$agency_type <- ifelse(agencies$agency_type == 'University or College' | 
+         (agencies$agency_type %in% c('Unknown','Other',NA) & 
+            (str_detect(agencies$agency_name, 'University') |
+            str_detect(agencies$agency_name, 'College') |
+            str_detect(agencies$agency_name, 'Institute') |
+            str_detect(agencies$agency_name, 'School') |
+            str_detect(agencies$agency_name, 'Education'))),
+       'Education', agencies$agency_type)
+
+#Create agency_type for Law Enforcement and move State Police into that category
+agencies$agency_type <- ifelse(agencies$agency_type == 'State Police' |
+       (agencies$agency_type %in% c('Unknown','Other',NA) & 
+         (str_detect(agencies$agency_name, 'Enforcement') | 
+            str_detect(agencies$agency_name, 'Drug') |
+            str_detect(agencies$agency_name, 'Narcotics') |
+            str_detect(agencies$agency_name, 'Alcohol') |
+            str_detect(agencies$agency_name, 'Liquor') |
+            str_detect(agencies$agency_name, 'Corrections') |
+            str_detect(agencies$agency_name, 'Highway Patrol') |
+            str_detect(agencies$agency_name, 'District Attorney') |
+            str_detect(agencies$agency_name, 'Attorney General') |
+            str_detect(agencies$agency_name, 'Criminal') |
+            str_detect(agencies$agency_name, 'Public Safety') |
+            str_detect(agencies$agency_name, 'State Patrol') |
+            str_detect(agencies$agency_name, 'Court') |
+            str_detect(agencies$agency_name, 'Crimes') |
+            str_detect(agencies$agency_name, 'Investigation') |
+            str_detect(agencies$agency_name, 'Detective') |
+            str_detect(agencies$agency_name, 'Constable') |
+            str_detect(agencies$agency_name, 'Police'))), 
+        'Law Enforcement',agencies$agency_type)
+
+#Add agencies to the Tribal agency_type
+agencies$agency_type <- ifelse(agencies$agency_type %in% c('Unknown','Other',NA) & 
+         (str_detect(agencies$agency_name, 'Tribal') |
+            str_detect(agencies$agency_name, 'Indian') |
+            str_detect(agencies$agency_name, 'Hopi'))
+            , 'Tribal', agencies$agency_type)
+
+#Collapse Unknown and NA into Other
+agencies$agency_type <- ifelse(agencies$agency_type %in% c('Unknown','Other',NA), 
+                               'Other', agencies$agency_type)
+
+ggplot(data=agencies, aes(x=agency_type)) + geom_bar() +
+  scale_y_continuous(labels = label_comma()) +
+  labs(x='Agency Type', y='Count', title = 'Agency Type Counts')
+```
+
+Now, let's explore the nibrs_start_date to see when agencies began reporting data to NIBRS
+
+```{r}
+#Confirm all reporting agencies have a start date
+agencies %>% filter(is_nibrs, is.na(nibrs_start_date))
+```
+
+```{r warning=FALSE, message=FALSE}
+#Plot the year that NIBRS began receiving data
+ggplot(agencies %>% filter(is_nibrs), aes(x=year(nibrs_start_date))) + geom_bar() +
+  labs(x='Start Year', y='Count', title='Start Year Distribution') +
+  scale_y_continuous(labels = label_comma())
+```
+
+It looks like NIBRS has been receiving data since 1990, however the amount of data greatly increased beginning in the late 2010s. Now, let's look at the breakdown by agency_type
+
+```{r warning=FALSE, message=FALSE}
+#First, normalize the number of reporting agencies each year by agency_type
+agencies_summary <- agencies %>% filter(is_nibrs) %>%
+  group_by(agency_type, year(nibrs_start_date)) %>%
+  summarise(count = n()) %>%
+  mutate(percentage = count / sum(count)) %>% 
+  rename('year'='year(nibrs_start_date)')
+
+#Create bar plot with percentages, faceted by agency_type
+ggplot(agencies_summary, aes(x = year, y = percentage)) +
+  geom_bar(stat = "identity") +
+  labs(x='Year',y='Percentage') +
+  scale_y_continuous(labels = label_percent()) +
+  facet_wrap(~agency_type)
+```
+
+With the exception of 'Other State Agency', all agency types increased their reporting around the late 2010s.
+
+## Visualize the Agencies Geographically
+
+Now, let's take a look at the locations of each agency using the latitude and longitude.
+
+Firstly, for simplicity, we'll look at only the continental US. Let's check if any latitude or longitude lines are outside the boundary of the continental US and are not Hawaii or Alaska
+
+```{r}
+#Continental US bounding box
+us_box <- c(left = -125, bottom = 24.5, right = -67, top = 49)
+
+#Explore points outside of the continuental US bouding box
+agencies %>% filter(latitude < us_box['bottom'] | latitude > us_box['top'] |
+                      longitude < us_box['left'] | longitude > us_box['right']) %>%
+  filter(!(state %in% c('Hawaii', 'Alaska')))
+```
+
+There is one agency in Kentucky that has apparently incorrect latitude and longitude. These values are likely a placehold. We will remove this datapoint from the dataframe.
+
+```{r}
+agencies <- agencies %>% filter(ori != 'KY0710900')
+```
+
+```{r warning=FALSE, message=FALSE}
+register_stadiamaps(key=key_get(service = "stadia", username="api-key"),write=F)
+
+#Create the map
+us <- get_stadiamap(us_box, zoom = 5, maptype = "alidade_smooth") 
+
+#Plot the agencies
+ggmap(us) + geom_point(data=agencies, aes(x=longitude, y=latitude), size=0.05) +
+  labs(x='',y='', title='Agencies in the Continental US') +
+  theme(axis.text.y=element_blank(), axis.text.x=element_blank(),
+        axis.ticks.y=element_blank(), axis.ticks.x=element_blank())
+```
+
+Now, let's look at the city/county breakdown on the map
+
+```{r warning=FALSE, message=FALSE}
+#Plot the City and County agencies together
+ggmap(us) + geom_point(data=agencies %>% filter(agency_type %in% c('County','City')),
+                       aes(x=longitude, y=latitude, color=agency_type), size=0.05) +
+    labs(x='',y='', title='City and County Agencies in the Continental US', 
+         color='Agency Type') + theme(axis.text.y=element_blank(), 
+                                      axis.text.x=element_blank(),
+        axis.ticks.y=element_blank(), axis.ticks.x=element_blank())
+
+#Plot the City and County agencies individually
+ggmap(us) + geom_point(data=agencies %>% filter(agency_type %in% c('County','City')),
+                       aes(x=longitude, y=latitude, color=agency_type), size=0.05) +
+  facet_wrap(~agency_type)  +
+    labs(x='',y='', title='City and County Agencies in the Continental US', 
+         color='Agency Type') + theme(axis.text.y=element_blank(), 
+                                      axis.text.x=element_blank(),
+        axis.ticks.y=element_blank(), axis.ticks.x=element_blank())
+```
+
+Let's look at the year that the agency began reporting data to NIBRS
+
+```{r warning=FALSE, message=FALSE}
+ggmap(us) + geom_point(data=agencies %>% filter(is_nibrs), 
+                       aes(x=longitude, y=latitude, color=year(nibrs_start_date)), 
+                       size=0.05)  +
+    labs(x='',y='', title='Agency Start Years in the Continental US', 
+         color='Start Year') + theme(axis.text.y=element_blank(), 
+                                      axis.text.x=element_blank(),
+        axis.ticks.y=element_blank(), axis.ticks.x=element_blank())
+```
+
+These values appear organized by state and region. Let's see if we can build a model to predict the nibrs_start_date by the state
+
+```{r}
+#Set random seed
+set.seed(1817)
+
+#Filter only for nibr agencies and create start_year variable
+agencies_nibr <- agencies %>% filter(is_nibrs)
+agencies_nibr$start_year <- year(agencies_nibr$nibrs_start_date)
+
+#Divide data into training (80%) and testing (20%)
+n <- nrow(agencies_nibr)
+test_index <- sample.int(n,size=round(n*0.2))
+train_agencies <- agencies_nibr[-test_index,]
+test_agencies <- agencies_nibr[test_index,]
+
+#Create a decision tree
+date_tree <- rpart(start_year~state, data=train_agencies, cp=0.0002)
+
+#Plot the decision tree
+plot(as.party(date_tree))
+
+#Use the decision tree to make predictions for the test data
+test_agencies$preds <- round(predict(date_tree, newdata = test_agencies))
+
+#Create confusion matrix
+confusion <- table(test_agencies$start_year,test_agencies$preds, dnn=c("actual", "predicted"))
+confusion
+
+#Calculate prediction accuracy
+sum(diag(confusion)) / sum(confusion)
+```
+
+The model has a 2% accuracy rate, which is very poor. However, in reviewing the Confusion matrix, it appears that the model is frequently off by only a year or two. Therefore, let's check if the model is more accurate after we bucket the years.
+
+```{r}
+#Create start range that buckets start_date into five year groups
+test_agencies$start_range <- 
+  cut(test_agencies$start_year, c(1985, 1990, 1995, 2000, 2005, 2010, 2015, 2020, 3000), 
+    labels = c('1985-1990', '1991-1995', '1996-2000', '2001-2005', '2006-2010', '2011-2015',
+               '2016-2020', '2020+'), include.lowest=TRUE)
+
+test_agencies$start_range_preds <- 
+  cut(test_agencies$preds, c(1985, 1990, 1995, 2000, 2005, 2010, 2015, 2020, 3000), 
+    labels = c('1985-1990', '1991-1995', '1996-2000', '2001-2005', '2006-2010', '2011-2015',
+               '2016-2020', '2020+'), include.lowest=TRUE)
+
+#Create confusion matrix
+confusion_range <- table(test_agencies$start_range,test_agencies$start_range_preds, dnn=c("actual", "predicted"))
+confusion_range
+
+#Calculate prediction accuracy
+sum(diag(confusion_range)) / sum(confusion_range)
+```
+
+Bucketing the years drastically improved the accuracy rate of the model to 52%. Let's see, on average, how far the prediction is from actual value.
+
+```{r}
+mean(abs(test_agencies$start_year - test_agencies$preds))
+```
+
+Though this model only has a 2% accuracy rate, the predictions are, on average, within 4 years of the actual value.
