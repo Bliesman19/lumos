@@ -1,0 +1,146 @@
+---
+title: "Tidy Tuesday 3-11-2025"
+author: "Bridget Liesman"
+format: 
+  html:
+    df-print: paged
+    embed-resources: true
+---
+
+```{r message=FALSE}
+#load libraries
+library(tidyverse)
+library(MASS)
+
+#Get the data
+tuesdata <- tidytuesdayR::tt_load('2025-03-11')
+pixar_films <- tuesdata$pixar_films
+glimpse(pixar_films)
+public_response <- tuesdata$public_response
+glimpse(public_response)
+```
+
+```{r}
+#Combine the tables
+pixar_data <- inner_join(pixar_films, public_response, by='film')
+glimpse(pixar_data)
+```
+
+## Exploratory Data Analysis
+
+### release_date
+
+```{r}
+#Explore NA values for release_date
+pixar_data %>% filter(is.na(release_date))
+
+#What years does the data include?
+ggplot(pixar_data, aes(x=year(release_date))) + geom_bar() +
+  labs(x= "Release Year", y='Frequency')
+
+#When (during the year) are movies most frequently released?
+ggplot(pixar_data, aes(x=as.factor(month(release_date)))) + geom_bar() +
+  labs(x= "Release Month", y='Frequency')
+```
+
+### run_time
+
+```{r}
+#Explore NA values for run_time
+pixar_data %>% filter(is.na(run_time))
+
+#What is the distribution of runtime?
+ggplot(data=pixar_data, aes(x=run_time)) + geom_boxplot() +
+  labs(x='Run Time') +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+#What is the outlier?
+pixar_data %>% filter(run_time > 140)
+```
+
+### film_rating
+
+```{r}
+#Explore NA values for film_rating
+pixar_data %>% filter(is.na(film_rating) | film_rating == 'N/A')
+
+#How are the films rated?
+ggplot(pixar_data %>% filter(film != 'Luca'), 
+       aes(x=film_rating)) + geom_bar() + 
+  labs(x= "Rating", y='Frequency')
+```
+
+### Public Response
+
+```{r warning=FALSE}
+#Explore NA values for public response metrics
+pixar_data %>% filter(is.na(rotten_tomatoes) | is.na(metacritic) | is.na(cinema_score)
+                      | is.na(critics_choice))
+
+#rotten_tomatoes distribution
+ggplot(data=pixar_data, aes(x=rotten_tomatoes)) + geom_boxplot() +
+  labs(x='Rotten Tomatoes') +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+#rotten_tomatoes outlier
+pixar_data %>% filter(rotten_tomatoes < 60)
+
+#metacritic distribution
+ggplot(data=pixar_data, aes(x=metacritic)) + geom_boxplot() +
+  labs(x='MetaCritic') +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+#cinema_score values
+ggplot(data=pixar_data, aes(x=cinema_score)) + geom_bar() +
+  labs(x='Cinema Score', y='Frequency')
+
+#critics_choice distribution
+ggplot(data=pixar_data,
+       aes(x=critics_choice)) + geom_boxplot() +
+  labs(x="Critic's Choice") +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+#Explore all four metrics together
+#Scatterplot
+ggplot(data=pixar_data %>%filter(!(is.na(rotten_tomatoes) | is.na(metacritic) | 
+                                   is.na(cinema_score) | is.na(critics_choice))), 
+       aes(x=rotten_tomatoes, y=metacritic, color=cinema_score, size=critics_choice)) + 
+  geom_point() +
+  labs(x='Rotten Tomatoes', y='MetaCritic', color='Cinema Score', size='Critics Choice')
+
+#density_plot
+#first convert cinema_score to numeric values using grade scale
+score_to_numeric <- c('A+'=100, 'A'=96.5, 'A-'=91.5)
+score_factor <- factor(pixar_data$cinema_score, levels = names(score_to_numeric))
+pixar_data$numeric_cinema_score <- score_to_numeric[score_factor]
+#now reshape the data
+pixar_long <- pixar_data %>% 
+  dplyr::select(rotten_tomatoes, metacritic, critics_choice, numeric_cinema_score) %>% 
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value")
+pixar_long$variable <- recode(pixar_long$variable,
+                           "rotten_tomatoes" = "Rotten Tomatoes",
+                           "metacritic" = "MetaCritic",
+                           "critics_choice" = "Critic's Choice",
+                           "numeric_cinema_score" = "Cinema Score (numeric)")
+#graph the density plot
+ggplot(pixar_long, aes(x = value, fill = variable)) +
+  geom_density(alpha = 0.5) +
+  labs(x = "Score", y='Density', fill='Metric')
+
+colnames(pixar_data)
+```
+
+## Linear Model
+
+```{r}
+#Remove rows with missing values
+pixar_data <- pixar_data %>% na.omit()
+#Build a model to predict critic's choice
+cc_model1 <- lm(critics_choice~month(release_date) + year(release_date) + run_time + 
+                 film_rating + rotten_tomatoes + metacritic + numeric_cinema_score, 
+               data=pixar_data)
+summary(cc_model1)
+
+#perform step AIC function on the model
+cc_model2 <- stepAIC(cc_model1)
+summary(cc_model2)
+```
