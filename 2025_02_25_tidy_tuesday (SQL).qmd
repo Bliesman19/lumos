@@ -1,0 +1,82 @@
+---
+title: "Tidy Tuesday 2-25-2025"
+author: "Bridget Liesman"
+format: 
+  html:
+    df-print: paged
+    embed-resources: true
+---
+
+```{r message=FALSE}
+#load libraries
+library(RSQLite)
+
+#get the data
+tuesdata <- tidytuesdayR::tt_load('2025-02-25')
+article_dat <- tuesdata$article_dat
+
+#create the SQL connection
+conn <- dbConnect(RSQLite::SQLite(), "")
+dbWriteTable(conn, "article_dat", article_dat, overwrite = TRUE)
+```
+
+```{r}
+#Explore the number of articles per journal
+query1 <- "SELECT journal, COUNT(pmid) AS num_articles
+FROM article_dat 
+GROUP BY journal
+ORDER BY num_articles DESC"
+dbGetQuery(conn, query1)
+```
+
+```{r}
+#Explore the average length of studies by journal
+query2 <- "SELECT journal, 
+AVG(study_year_end-study_year_start) AS avg_study_length,
+MAX(study_year_end-study_year_start) AS longest_study,
+MIN (study_year_end-study_year_start) AS shortest_study
+FROM article_dat
+WHERE study_year_start > 0 AND study_year_end >= study_year_start
+GROUP BY journal"
+dbGetQuery(conn, query2)
+```
+
+```{r}
+#What types of studies are the longest? 
+query3 <- "WITH longest_studies AS(
+SELECT pmid, 
+study_year_end-study_year_start AS study_length
+FROM article_dat
+WHERE study_year_start > 0 AND study_year_end >= study_year_start
+ORDER BY study_length DESC LIMIT 5
+)
+SELECT title,
+study_length
+FROM longest_studies LEFT JOIN article_dat 
+ON longest_studies.pmid = article_dat.pmid
+ORDER BY study_length DESC
+"
+dbGetQuery(conn, query3)
+```
+
+```{r}
+#explore race1 values in studies
+query4 <- "
+SELECT 
+CASE WHEN race1 LIKE '%Black%' OR race1 LIKE 'african%' THEN 'Black' 
+WHEN race1 LIKE '%white%' OR race1 LIKE 'caucasian' OR race1 LIKE 'European%' 
+THEN 'White'
+WHEN race1 LIKE '%asian%' THEN 'Asian'
+WHEN race1 LIKE 'hispanic%' THEN 'Hispanic'
+WHEN race1 LIKE '%american indian%' THEN 'American Indian'
+WHEN race1 LIKE 'non african american' OR race1 LIKE 'non-african american' 
+THEN 'Non African American'
+WHEN race1 IS NULL THEN 'Unavailable'
+ELSE race1 END AS race,
+COUNT(pmid) AS num_studies
+FROM article_dat
+GROUP BY race
+ORDER BY num_studies DESC
+"
+dbGetQuery(conn, query4)
+```
